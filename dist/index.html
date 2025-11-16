@@ -1,0 +1,1027 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NAS MONITOR [v2.0]</title>
+    
+    <!-- 1. 加载 Tailwind CSS 用于布局 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. 加载复古像素字体 'VT323' -->
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+    
+    <!-- 3. 自定义复古样式 (修复：恢复所有样式) -->
+    <style>
+        body {
+            font-family: 'VT323', monospace;
+            background-color: #DFDFDF; /* 经典的浅灰色/米色背景 */
+            color: #000;
+            /*font-smoothing: none;*/
+            -webkit-font-smoothing: none;
+            font-size: 22px; /* 增大基础字号以匹配像素风格 */
+            /* 模拟旧式CRT屏幕的微妙点阵图案 */
+            background-image: radial-gradient(rgba(0,0,0,0.15) 1px, transparent 1px);
+            background-size: 3px 3px;
+            /* 新增：防止在拖拽/调整大小时出现滚动条 */
+            overflow: hidden; 
+        }
+
+        .window {
+            background-color: #F0F0F0; /* 窗口内部的米白色 */
+            border: 2px solid #000;
+            box-shadow: 5px 5px 0px #000; /* 经典的硬阴影 */
+            overflow: hidden; /* 修改：必须是 hidden */
+            border-radius: 0; /* 坚持使用直角 */
+            position: absolute;
+            
+            /* 修改：移除 CSS resize，将由 JS 控制 */
+            /* resize: both; */ 
+            
+            min-width: 320px; /* 最小宽度 (15 * 20px grid) */
+            min-height: 140px; /* 最小高度 (7 * 20px grid) */
+        }
+
+        .title-bar {
+            background-color: #000;
+            color: #FFF;
+            padding: 4px 10px;
+            font-weight: bold;
+            border-bottom: 2px solid #000;
+            /* 模拟 Mac 标题栏上的细微条纹 */
+            background-image: linear-gradient(45deg, rgba(255,255,255,0.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.15) 75%, transparent 75%, transparent);
+            background-size: 12px 12px;
+            cursor: move; /* 拖拽光标 */
+            user-select: none; /* 防止选中文本 */
+            -webkit-user-select: none;
+        }
+        
+        /* 新增：按住 Shift 键拖动标题栏时，显示调整大小的光标 */
+        .window.resizing .title-bar,
+        .window.resizing {
+            cursor: se-resize;
+        }
+
+        .content {
+            padding: 1rem;
+            height: calc(100% - 36px); /* 减去标题栏高度 */
+            overflow: hidden; /* 确保内容被裁剪 */
+        }
+        
+        /* 仪表盘样式 */
+        .meter {
+            background-color: #C0C0C0; /* 仪表盘背景 */
+            border: 2px solid #000;
+            height: 30px;
+            padding: 2px;
+            box-shadow: inset 2px 2px 0px #888, inset -2px -2px 0px #FFF; /* 内阴影 */
+        }
+        
+        /* 进度条样式 */
+        .bar {
+            background-color: #000;
+            height: 100%;
+            /* 模拟进度条上的高光/条纹 */
+            background-image: linear-gradient(45deg, rgba(255,255,255,0.3) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.3) 50%, rgba(255,255,255,0.3) 75%, transparent 75%, transparent);
+            background-size: 10px 10px;
+            transition: width 0.5s ease;
+        }
+
+        /* 网络状态数字 */
+        .network-stat {
+            font-size: 2.25rem; /* 增大网络速度数字 */
+            line-height: 1;
+        }
+
+        .window.dragging {
+            opacity: 0.9;
+            z-index: 10;
+        }
+        .window .resize-handle {
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            bottom: 6px;
+            right: 6px;
+            border: 2px solid #000;
+            background: repeating-linear-gradient(135deg, #D3D3D3, #D3D3D3 4px, #F8F8F8 4px, #F8F8F8 8px);
+            box-shadow: inset 2px 2px 0px #FFF;
+            cursor: se-resize;
+        }
+        .window.resizing .resize-handle {
+            background: repeating-linear-gradient(135deg, #B0B0B0, #B0B0B0 4px, #E0E0E0 4px, #E0E0E0 8px);
+        }
+        
+        #desktop {
+            position: relative;
+            /* 修改：使用视口高度确保桌面铺满 */
+            width: 100%;
+            height: 100vh;
+        }
+        .layout-controls-wrapper {
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            width: 72px;
+            height: 150px;
+            z-index: 50;
+        }
+        .layout-controls {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            pointer-events: none;
+        }
+        .layout-controls-wrapper:hover .layout-controls,
+        .layout-controls-wrapper:focus-within .layout-controls,
+        .layout-controls-wrapper:active .layout-controls {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+        .layout-btn {
+            width: 56px;
+            height: 56px;
+            background-color: #000;
+            border: 2px solid #000;
+            box-shadow: 4px 4px 0px #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            position: relative;
+        }
+        .layout-btn::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            right: 110%;
+            top: 50%;
+            transform: translateY(-50%);
+            background-color: #000;
+            color: #FFF;
+            border: 2px solid #000;
+            padding: 0.15rem 0.45rem;
+            font-size: 0.9rem;
+            white-space: nowrap;
+            box-shadow: 3px 3px 0px #000;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+        .layout-btn.show-tooltip::after {
+            opacity: 1;
+        }
+        .layout-btn:active {
+            transform: translate(2px, 2px);
+            box-shadow: 2px 2px 0px #000;
+        }
+        .pixel-icon {
+            width: 28px;
+            height: 28px;
+            border: 2px solid #000;
+            background-color: #F8F8F8;
+            box-shadow: inset 2px 2px 0px #FFF, inset -2px -2px 0px #999;
+            position: relative;
+        }
+        .icon-save::before,
+        .icon-save::after {
+            content: '';
+            position: absolute;
+            left: 4px;
+            right: 4px;
+            border: 2px solid #000;
+        }
+        .icon-save::before {
+            top: 4px;
+            height: 10px;
+            background-color: #9EE493;
+        }
+        .icon-save::after {
+            bottom: 4px;
+            height: 6px;
+            background-color: #E0E0E0;
+        }
+        .icon-clear::before,
+        .icon-clear::after {
+            content: '';
+            position: absolute;
+            left: 4px;
+            right: 4px;
+            height: 4px;
+            border: 2px solid #000;
+            background: repeating-linear-gradient(135deg, #FFD1D1, #FFD1D1 4px, #FFF 4px, #FFF 8px);
+        }
+        .icon-clear::before {
+            top: 6px;
+        }
+        .icon-clear::after {
+            top: 16px;
+        }
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            border: 0;
+        }
+        
+        /* --- 机械翻页动画 --- */
+        
+        /* 轮播项目的容器 */
+        .carousel-list {
+            position: relative;
+            height: 100%;
+        }
+        
+        /* 轮播的单个项目 */
+        .carousel-item {
+            position: absolute;
+            width: 100%;
+            opacity: 0;
+            /* 修改：从 translateY(20px) 更改为 translateY(100%) */
+            transform: translateY(100%); /* 从正下方开始 */
+            
+            /* 修改：使用更平滑的缓动曲线 (Expo.easeOut) */
+            transition: transform 0.6s cubic-bezier(0.23, 1, 0.32, 1), 
+                        opacity 0.5s ease-out;
+        }
+        
+        /* 正在进入视图的项目 */
+        .carousel-item.is-visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        
+        /* 正在离开视图的项目 */
+        .carousel-item.is-leaving {
+            opacity: 0;
+            /* 修改：从 translateY(-20px) 更改为 translateY(-100%) */
+            transform: translateY(-100%); /* 向上完全移出 */
+
+            /* 修改：使用匹配的缓动曲线 (Expo.easeIn) */
+            transition: transform 0.6s cubic-bezier(0.755, 0.05, 0.855, 0.06), 
+                        opacity 0.5s ease-in;
+        }
+        #docker-content-body {
+            overflow: visible;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            gap: 0.25rem;
+        }
+        #docker-list {
+            flex: 1;
+            min-height: 0;
+        }
+        .docker-terminal {
+            background-color: #ECECEC;
+            border: 2px solid #000;
+            box-shadow: inset 2px 2px 0px #FFF, inset -2px -2px 0px #AAA;
+            padding: 0.75rem 1.25rem 0.75rem 0.75rem;
+            margin-top: 0;
+            margin-right: 20px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            max-width: 100%;
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            align-items: stretch;
+        }
+        #docker-list.flow-list .carousel-item {
+            position: relative;
+            transform: none;
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+        #docker-list.flow-list .carousel-item.is-visible {
+            opacity: 1;
+        }
+        #docker-list.flow-list .carousel-item.is-leaving {
+            opacity: 0;
+            transform: none;
+        }
+        #storage-list .carousel-item,
+        #storage-list .carousel-item.is-visible,
+        #storage-list .carousel-item.is-leaving {
+            transform: none !important;
+            opacity: 1 !important;
+            transition: none !important;
+        }
+        .docker-terminal::-webkit-scrollbar {
+            height: 12px;
+        }
+        .docker-terminal::-webkit-scrollbar-thumb {
+            background-color: #AAA;
+            border: 2px solid #000;
+        }
+        .docker-line {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 1.1rem;
+            white-space: nowrap;
+            letter-spacing: 1px;
+        }
+        .docker-name {
+            min-width: 240px;
+        }
+        .docker-status {
+            min-width: 120px;
+        }
+        .status-indicator {
+            width: 14px;
+            height: 14px;
+            border: 2px solid #000;
+            box-shadow: inset 2px 2px 0px rgba(255,255,255,0.6);
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <!-- 页面总标题 -->
+    <header class="text-center mb-8">
+        <h1 class="text-4xl">NAS SYSTEM MONITOR :: v2.0</h1>
+        <p class="text-xl">SYSTEM UPTIME: <span id="uptime-text">0 days, 00:00:00</span></p>
+    </header>
+
+    <!-- 修改：移除 max-w-6xl 和 mx-auto，让桌面铺满 -->
+    <div class="layout-controls-wrapper" aria-label="布局控制">
+        <div class="layout-controls">
+            <button id="save-layout-btn" class="layout-btn" type="button">
+                <span class="pixel-icon icon-save" aria-hidden="true"></span>
+                <span class="sr-only">保存布局</span>
+            </button>
+            <button id="clear-layout-btn" class="layout-btn" type="button">
+                <span class="pixel-icon icon-clear" aria-hidden="true"></span>
+                <span class="sr-only">清除布局</span>
+            </button>
+        </div>
+    </div>
+
+    <main id="desktop">
+            
+            <!-- CPU 窗口 (修改：调整了初始位置和大小) -->
+            <div class="window" style="top: 20px; left: 20px; width: 360px; height: 200px;">
+                <div class="title-bar">:: C.P.U. STATUS ::</div>
+                <div class="content">
+                    <p class="mb-2">CURRENT LOAD: <span id="cpu-text">0%</span></p>
+                    <div class="meter">
+                        <div id="cpu-bar" class="bar" style="width: 0%;"></div>
+                    </div>
+                    <p class="mt-3">CURRENT TEMP: <span id="cpu-temp-text">0&deg;C</span></p>
+                </div>
+                <div class="resize-handle" title="拖拽调整窗口大小"></div>
+            </div>
+
+            <!-- 内存 窗口 (修改：调整了初始位置和大小) -->
+            <div class="window" style="top: 20px; left: 400px; width: 360px; height: 200px;">
+                <div class="title-bar">:: MEMORY (RAM) ::</div>
+                <div class="content">
+                    <p class="mb-2">USAGE: <span id="ram-text">0%</span> (<span id="ram-usage-text">0.0</span> / 16.0 GB)</p>
+                    <div class="meter">
+                        <div id="ram-bar" class="bar" style="width: 0%;"></div>
+                    </div>
+                </div>
+                <div class="resize-handle" title="拖拽调整窗口大小"></div>
+            </div>
+
+            <!-- 网络 窗口 (修改：调整了初始位置和大小) -->
+            <div class="window" style="top: 20px; left: 780px; width: 360px; height: 200px;">
+                <div class="title-bar">:: NETWORK I/O (ETH0) ::</div>
+                <div class="content">
+                    <div class="grid grid-cols-2 gap-4 text-center">
+                        <div>
+                            <p class="mb-1">DOWNLOAD &darr;</p>
+                            <p class="network-stat" id="net-dl-text">0.0</p>
+                            <p class="text-base">MB/s</p>
+                        </div>
+                        <div>
+                            <p class="mb-1">UPLOAD &uarr;</p>
+                            <p class="network-stat" id="net-ul-text">0.0</p>
+                            <p class="text-base">MB/s</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="resize-handle" title="拖拽调整窗口大小"></div>
+            </div>
+
+            <!-- Docker 窗口 (修改：添加 id, 调整大小) -->
+            <div class="window" id="docker-window" data-height-step="docker" style="top: 240px; left: 20px; width: 740px; height: 260px;">
+                <div class="title-bar">:: DOCKER CONTAINERS ::</div>
+                <!-- 修改：添加 content-body 用于计算，carousel-list 用于动画 -->
+                <div class="content" id="docker-content-body">
+                    <p class="mb-2">ACTIVE: <span id="docker-active-count">0</span> / TOTAL: <span id="docker-total-count">0</span></p>
+                    <div class="docker-terminal">
+                        <div id="docker-list" class="carousel-list flow-list text-lg leading-tight">
+                            <!-- �����б����� JS ��̬��� -->
+                        </div>
+                    </div>
+                </div>
+                <div class="resize-handle" title="拖拽调整窗口大小"></div>
+            </div>
+
+            <!-- 存储 窗口 (修改：添加 id, 调整大小) -->
+            <div class="window" id="storage-window" data-height-step="storage" style="top: 520px; left: 20px; width: 1120px; height: 320px;">
+                <div class="title-bar">:: STORAGE UNITS ::</div>
+                <!-- 修改：添加 content-body 用于计算，carousel-list 用于动画 -->
+                <div class="content" id="storage-content-body">
+                    <div id="storage-list" class="carousel-list space-y-5">
+                        <!-- 磁盘列表将由 JS 动态填充 -->
+                    </div>
+                </div>
+                <div class="resize-handle" title="拖拽调整窗口大小"></div>
+            </div>
+
+        <!-- main 结束标签 -->
+    </main> 
+
+    <!-- 页面页脚 -->
+    <footer class="text-center mt-8 text-sm text-gray-700 fixed bottom-4 left-0 right-0">
+        <p>NAS MONITOR [v2.0] :: STATUS: OK :: REFRESH: 2s</p>
+    </footer>
+
+    <!-- 4. 用于模拟数据的 JavaScript (无改动) -->
+    <script>
+        // --- 1. DOM 元素获取 ---
+        const cpuBar = document.getElementById('cpu-bar');
+        const cpuText = document.getElementById('cpu-text');
+        const cpuTempText = document.getElementById('cpu-temp-text');
+        const ramBar = document.getElementById('ram-bar');
+        const ramText = document.getElementById('ram-text');
+        const ramUsageText = document.getElementById('ram-usage-text');
+        const netDlText = document.getElementById('net-dl-text');
+        const netUlText = document.getElementById('net-ul-text');
+        
+        // Docker 元素
+        const dockerActiveCount = document.getElementById('docker-active-count');
+        const dockerTotalCount = document.getElementById('docker-total-count');
+        const dockerList = document.getElementById('docker-list');
+        const dockerWindow = document.getElementById('docker-window');
+        const dockerContentBody = document.getElementById('docker-content-body');
+
+        // Storage 元素
+        const storageList = document.getElementById('storage-list');
+        const storageWindow = document.getElementById('storage-window');
+        const storageContentBody = document.getElementById('storage-content-body');
+        
+        const uptimeText = document.getElementById('uptime-text');
+        let uptimeSeconds = 0;
+        let uptimeTimer = null;
+        let totalRamGB = 16.0;
+        const API_BASE = window.APP_API_BASE || '';
+        const LAYOUT_STORAGE_KEY = 'nas-monitor-layout-v2';
+        const layoutDefaults = {};
+        const DOCKER_STATUS_COLORS = {
+            RUNNING: '#2ECC71',
+            RESTARTING: '#F1C40F',
+            STOPPED: '#E74C3C'
+        };
+
+        // --- 2. 全局数据存储 (模拟数据库) ---
+        let storageItemsData = [];
+        let dockerContainersData = [];
+        
+
+        // --- 3. 轮播和布局的全局状态 ---
+        let dockerCarouselState = {
+            itemHeight: 30, // 估算值, 稍后会计算
+            headerHeight: 45, // 估算值
+            currentIndex: 0,
+            itemsToShow: 1
+        };
+        let storageCarouselState = {
+            itemHeight: 93, // 估算值
+            headerHeight: 0, // 估算值
+            currentIndex: 0,
+            itemsToShow: 1
+        };
+
+        // --- 4. 数据拉取 ---
+        async function fetchJSON(endpoint) {
+            const response = await fetch(`${API_BASE}${endpoint}`, { cache: 'no-store' });
+            if (!response.ok) {
+                throw new Error(`Request failed: ${response.status}`);
+            }
+            return response.json();
+        }
+
+        async function loadSystemMetrics() {
+            try {
+                const data = await fetchJSON('/api/system');
+                totalRamGB = data.ram_total_gb || totalRamGB;
+
+                const cpuValue = Number(data.cpu_usage || 0).toFixed(0);
+                cpuBar.style.width = cpuValue + '%';
+                cpuText.textContent = cpuValue + '%';
+                const cpuTemp = Number(data.cpu_temperature);
+                cpuTempText.innerHTML = isNaN(cpuTemp) ? 'N/A' : `${cpuTemp.toFixed(1)}&deg;C`;
+
+                const ramValue = Number(data.ram_usage_percent || 0).toFixed(0);
+                const ramUsed = Number(data.ram_used_gb || 0).toFixed(1);
+                ramBar.style.width = ramValue + '%';
+                ramText.textContent = ramValue + '%';
+                ramUsageText.textContent = `${ramUsed} / ${totalRamGB.toFixed(1)} GB`;
+
+                const dlMbps = Number(data.network?.download_mbps || 0);
+                const ulMbps = Number(data.network?.upload_mbps || 0);
+                netDlText.textContent = (dlMbps / 8).toFixed(1);
+                netUlText.textContent = (ulMbps / 8).toFixed(1);
+
+                setUptime(data.uptime_seconds || 0);
+            } catch (err) {
+                console.warn('loadSystemMetrics error:', err);
+            }
+        }
+
+        async function loadStorageData() {
+            try {
+                const data = await fetchJSON('/api/storage');
+                storageItemsData = Array.isArray(data) ? data.map(item => ({
+                    name: item.name || item.mountpoint || 'UNKNOWN',
+                    usage: Number(item.usage_percent || 0).toFixed(0),
+                    temp: item.temperature ? Number(item.temperature).toFixed(1) : 'N/A'
+                })) : [];
+                recalculateItemsToShow(storageWindow, storageContentBody, storageCarouselState);
+                renderCarousels();
+            } catch (err) {
+                console.warn('loadStorageData error:', err);
+            }
+        }
+
+        async function loadDockerData() {
+            try {
+                const data = await fetchJSON('/api/docker');
+                dockerContainersData = Array.isArray(data) ? data.map(item => {
+                    const rawStatus = (item.status || '').toUpperCase();
+                    let status = 'UNKNOWN';
+                    if (rawStatus.includes('RUN')) status = 'RUNNING';
+                    else if (rawStatus.includes('RESTART')) status = 'RESTARTING';
+                    else if (rawStatus.includes('EXIT') || rawStatus.includes('STOP')) status = 'STOPPED';
+                    return {
+                        name: item.name || 'CONTAINER',
+                        status
+                    };
+                }) : [];
+                const active = dockerContainersData.filter(c => c.status === 'RUNNING').length;
+                dockerActiveCount.textContent = active;
+                dockerTotalCount.textContent = dockerContainersData.length;
+                recalculateItemsToShow(dockerWindow, dockerContentBody, dockerCarouselState);
+                renderCarousels();
+            } catch (err) {
+                console.warn('loadDockerData error:', err);
+            }
+        }
+
+        function updateUptime() {
+            uptimeSeconds = Math.max(0, uptimeSeconds + 1);
+            const days = Math.floor(uptimeSeconds / 86400);
+            const hours = Math.floor((uptimeSeconds % 86400) / 3600);
+            const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+            const seconds = uptimeSeconds % 60;
+            const f = (n) => n.toString().padStart(2, '0');
+            uptimeText.textContent = `${days} days, ${f(hours)}:${f(minutes)}:${f(seconds)}`;
+        }
+
+        function setUptime(seconds) {
+            uptimeSeconds = Math.floor(seconds || 0);
+            if (uptimeTimer) clearInterval(uptimeTimer);
+            uptimeTimer = setInterval(updateUptime, 1000);
+            updateUptime();
+        }
+
+        // --- 6. ���Ĺ��ܣ���Ⱦ�ֲ� (ÿ 3 ��) ---
+// --- 6. 核心功能：渲染轮播 (每 3 秒) ---
+        function renderCarousels() {
+            // A. 渲染 Storage 轮播
+            renderCarousel(
+                storageList, 
+                storageItemsData, 
+                storageCarouselState, 
+                (item) => `
+                    <div class="storage-item">
+                        <p class="mb-2">${item.name}: ${item.usage}% | TEMP: ${item.temp}&deg;C</p>
+                        <div class="meter">
+                            <div class="bar" style="width: ${item.usage}%;"></div>
+                        </div>
+                    </div>
+                `,
+                { advance: false }
+            );
+            
+            // B. 渲染 Docker 轮播
+            renderCarousel(
+                dockerList, 
+                dockerContainersData, 
+                dockerCarouselState, 
+                (item) => `
+                    <div class="docker-line">
+                        <span class="docker-name">CONTAINER [${item.name}]</span>
+                        <span class="status-indicator" style="background-color: ${getDockerStatusColor(item.status)};"></span>
+                        <span class="docker-status">STATUS: ${item.status}</span>
+                    </div>
+                `
+            );
+        }
+
+        function getDockerStatusColor(status) {
+            return DOCKER_STATUS_COLORS[status] || '#888888';
+        }
+
+        /**
+         * 通用的轮播渲染器
+         * @param {HTMLElement} listElement - The list <ul>/<div> element.
+         * @param {Array} data - The full data array.
+         * @param {Object} state - The state object for this carousel.
+         * @param {Function} renderFunc - Function to render a single item's HTML.
+         */
+        function renderCarousel(listElement, data, state, renderFunc, options = {}) {
+            const { advance = true } = options;
+            const isFlowList = listElement.classList.contains('flow-list');
+            if (!Array.isArray(data) || data.length === 0) {
+                listElement.innerHTML = '';
+                state.currentIndex = 0;
+                return;
+            }
+            // 1. 获取要显示的项目索引
+            const indicesToShow = [];
+            for (let i = 0; i < state.itemsToShow; i++) {
+                indicesToShow.push((state.currentIndex + i) % data.length);
+            }
+            
+            // 2. 标记即将离开的项目
+            Array.from(listElement.children).forEach(child => {
+                const childIndex = parseInt(child.dataset.index, 10);
+                if (!indicesToShow.includes(childIndex)) {
+                    child.classList.add('is-leaving');
+                    child.classList.remove('is-visible');
+                    // 动画结束后移除
+                    setTimeout(() => child.remove(), 600); // 修复：匹配动画时间
+                }
+            });
+
+            // 3. 添加或更新可见的项目
+            indicesToShow.forEach((dataIndex, viewIndex) => {
+                const item = data[dataIndex];
+                let itemEl = listElement.querySelector(`[data-index="${dataIndex}"]`);
+                
+                if (!itemEl) { // 项目不在 DOM 中，创建它
+                    itemEl = document.createElement('div');
+                    itemEl.dataset.index = dataIndex;
+                    itemEl.className = 'carousel-item';
+                    if (!isFlowList) {
+                        itemEl.style.top = `${viewIndex * state.itemHeight}px`;
+                    } else {
+                        itemEl.style.top = '';
+                    }
+                    listElement.appendChild(itemEl);
+                    
+                    // 延迟一帧添加入场动画
+                    requestAnimationFrame(() => {
+                        itemEl.classList.add('is-visible');
+                    });
+                } else {
+                    // 项目已在 DOM 中，确保它可见 (如果它之前在离开)
+                    itemEl.classList.remove('is-leaving');
+                    itemEl.classList.add('is-visible');
+                    // 确保它在正确的位置
+                    if (!isFlowList) {
+                        itemEl.style.top = `${viewIndex * state.itemHeight}px`;
+                    } else {
+                        itemEl.style.top = '';
+                    }
+                }
+                
+                // 始终更新 HTML 内容以反映最新数据
+                itemEl.innerHTML = renderFunc(item);
+            });
+
+            // 4. 更新下一个周期的起始索引
+            // 每次向前滚动一个项目，而不是一整页
+            if (advance) {
+                state.currentIndex = (state.currentIndex + 1) % data.length;
+            }
+        }
+
+
+        // --- 7. 核心功能：拖拽与调整大小 (合并) ---
+        function initWindowManagement() {
+            const SNAP_GRID_SIZE = 20;
+            const desktop = document.getElementById('desktop');
+            const windows = document.querySelectorAll('.window');
+            
+            let activeWindow = null;
+            let actionType = null;
+            let startX = 0;
+            let startY = 0;
+            let startLeft = 0;
+            let startTop = 0;
+            let startWidth = 0;
+            let startHeight = 0;
+
+            function bindPointer(target, windowEl, type) {
+                if (!target) return;
+                target.addEventListener('mousedown', (e) => {
+                    if (type === 'drag' && e.target !== target) return;
+
+                    e.preventDefault();
+                    activeWindow = windowEl;
+                    actionType = type;
+                    const rect = activeWindow.getBoundingClientRect();
+                    const desktopRect = desktop.getBoundingClientRect();
+
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    startLeft = rect.left - desktopRect.left;
+                    startTop = rect.top - desktopRect.top;
+                    startWidth = rect.width;
+                    startHeight = rect.height;
+
+                    activeWindow.classList.add(type === 'drag' ? 'dragging' : 'resizing');
+
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onMoveEnd);
+                    document.body.style.userSelect = 'none';
+                });
+            }
+
+            windows.forEach(windowEl => {
+                const titleBar = windowEl.querySelector('.title-bar');
+                const resizeHandle = windowEl.querySelector('.resize-handle');
+                bindPointer(titleBar, windowEl, 'drag');
+                bindPointer(resizeHandle, windowEl, 'resize');
+            });
+
+            function onMove(e) {
+                if (!activeWindow) return;
+                e.preventDefault();
+
+                const desktopRect = desktop.getBoundingClientRect();
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+
+                if (actionType === 'drag') {
+                    let newX = startLeft + dx;
+                    let newY = startTop + dy;
+
+                    newX = Math.round(newX / SNAP_GRID_SIZE) * SNAP_GRID_SIZE;
+                    newY = Math.round(newY / SNAP_GRID_SIZE) * SNAP_GRID_SIZE;
+
+                    const maxX = Math.max(0, desktopRect.width - activeWindow.offsetWidth);
+                    const maxY = Math.max(0, desktopRect.height - activeWindow.offsetHeight);
+
+                    newX = Math.min(Math.max(0, newX), maxX);
+                    newY = Math.min(Math.max(0, newY), maxY);
+
+                    activeWindow.style.left = `${newX}px`;
+                    activeWindow.style.top = `${newY}px`;
+                } else if (actionType === 'resize') {
+                    let newWidth = startWidth + dx;
+                    let newHeight = startHeight + dy;
+
+                    newWidth = Math.round(newWidth / SNAP_GRID_SIZE) * SNAP_GRID_SIZE;
+                    newHeight = Math.round(newHeight / SNAP_GRID_SIZE) * SNAP_GRID_SIZE;
+
+                    const maxWidth = desktopRect.width - startLeft;
+                    const maxHeight = desktopRect.height - startTop;
+
+                    if (maxWidth > 0) {
+                        newWidth = Math.min(newWidth, maxWidth);
+                    }
+                    if (maxHeight > 0) {
+                        newHeight = Math.min(newHeight, maxHeight);
+                    }
+
+                    const computedStyle = window.getComputedStyle(activeWindow);
+                    const minWidth = parseInt(computedStyle.minWidth, 10) || 320;
+                    const minHeight = parseInt(computedStyle.minHeight, 10) || 140;
+
+                    newWidth = Math.max(minWidth, newWidth);
+                    newHeight = Math.max(minHeight, newHeight);
+
+                    if (activeWindow.dataset.heightStep === 'storage') {
+                        newHeight = snapHeightToContent(newHeight, storageContentBody, storageCarouselState, activeWindow);
+                    } else if (activeWindow.dataset.heightStep === 'docker') {
+                        newHeight = snapHeightToContent(newHeight, dockerContentBody, dockerCarouselState, activeWindow);
+                    }
+
+                    activeWindow.style.width = `${newWidth}px`;
+                    activeWindow.style.height = `${newHeight}px`;
+                }
+            }
+
+            function onMoveEnd() {
+                if (!activeWindow) return;
+
+                if (actionType === 'resize') {
+                    recalculateItemsToShow(dockerWindow, dockerContentBody, dockerCarouselState);
+                    recalculateItemsToShow(storageWindow, storageContentBody, storageCarouselState);
+                    renderCarousels();
+                }
+
+                activeWindow.classList.remove('dragging', 'resizing');
+                activeWindow = null;
+                actionType = null;
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onMoveEnd);
+                document.body.style.userSelect = '';
+            }
+        }
+        /**
+         * 辅助函数：计算高度吸附
+         * @param {number} newHeight - 鼠标拖动的新高度
+         * @param {HTMLElement} contentBody - 内容区域元素
+         * @param {Object} state - 轮播状态
+         */
+        function snapHeightToContent(newHeight, contentBody, state, windowEl) {
+            const titleBarHeight = 36;
+            const contentPadding = 32; // 1rem padding top + bottom
+            const contentHeight = newHeight - titleBarHeight - contentPadding - state.headerHeight;
+            
+            let itemsToShow = Math.max(1, Math.floor(contentHeight / state.itemHeight));
+            let snappedContentHeight = (itemsToShow * state.itemHeight);
+            snappedContentHeight = Math.max(state.itemHeight, snappedContentHeight);
+            const snappedWindowHeight = snappedContentHeight + state.headerHeight + titleBarHeight + contentPadding;
+            const minHeight = parseInt(window.getComputedStyle(windowEl).minHeight, 10) || 140;
+            return Math.max(minHeight, snappedWindowHeight);
+        }
+        /**
+         * 辅助函数：在调整大小后，重新计算并存储可见项的数量
+         */
+        function recalculateItemsToShow(windowEl, contentBody, state) {
+            const contentHeight = contentBody.clientHeight - state.headerHeight;
+            state.itemsToShow = Math.max(1, Math.floor(contentHeight / state.itemHeight));
+        }
+
+        /**
+         * 辅助函数：计算并缓存轮播项的精确高度
+         */
+        function cacheElementMetrics() {
+            // 1. Storage
+            // 临时创建一个项目以测量其高度
+            const tempStorageItem = document.createElement('div');
+            tempStorageItem.className = 'storage-item';
+            tempStorageItem.style.visibility = 'hidden';
+            tempStorageItem.style.position = 'absolute'; // 防止影响布局
+            tempStorageItem.innerHTML = `
+                <p class="mb-2">DRIVE [TEMP]: 0% | TEMP: 0&deg;C</p>
+                <div class="meter"><div class="bar" style="width: 0%;"></div></div>
+            `;
+            storageList.appendChild(tempStorageItem);
+            // 高度 + 'space-y-5' (1.25rem * 22px) -> 约 93px
+            storageCarouselState.itemHeight = tempStorageItem.offsetHeight + 28; // 28px for space-y-5
+            storageList.removeChild(tempStorageItem);
+            
+            // 2. Docker
+            const tempDockerItem = document.createElement('div');
+            tempDockerItem.className = 'carousel-item';
+            tempDockerItem.style.visibility = 'hidden';
+            tempDockerItem.style.position = 'absolute'; // ��ֹӰ�첼��
+            tempDockerItem.innerHTML = `
+                <div class="docker-line">
+                    <span class="docker-name">CONTAINER [TEMP]</span>
+                    <span class="status-indicator"></span>
+                    <span class="docker-status">STATUS: RUNNING</span>
+                </div>
+            `;
+            dockerList.appendChild(tempDockerItem);
+            // �߶� + Ĭ���о�
+            dockerCarouselState.itemHeight = tempDockerItem.offsetHeight + 4; // ��ʱ������ƫ��
+            dockerList.removeChild(tempDockerItem);
+
+            // 3. Docker 头部高度
+            const dockerHeader = dockerContentBody.querySelector('p'); // "ACTIVE: 0 / TOTAL: 0"
+            dockerCarouselState.headerHeight = dockerHeader.offsetHeight + 12; // mb-2 + mt-3
+            
+            // 4. 首次计算可见项
+            recalculateItemsToShow(dockerWindow, dockerContentBody, dockerCarouselState);
+            recalculateItemsToShow(storageWindow, storageContentBody, storageCarouselState);
+        }
+
+        function getWindowLayout(windowEl) {
+            return {
+                top: windowEl.style.top,
+                left: windowEl.style.left,
+                width: windowEl.style.width,
+                height: windowEl.style.height
+            };
+        }
+
+        function applyLayout(windowEl, layout) {
+            if (!layout) return;
+            ['top', 'left', 'width', 'height'].forEach(prop => {
+                if (layout[prop]) {
+                    windowEl.style[prop] = layout[prop];
+                }
+            });
+        }
+
+        function captureDefaultLayout() {
+            document.querySelectorAll('.window').forEach(windowEl => {
+                if (!windowEl.id) return;
+                layoutDefaults[windowEl.id] = getWindowLayout(windowEl);
+            });
+        }
+
+        function loadLayoutFromStorage() {
+            const saved = localStorage.getItem(LAYOUT_STORAGE_KEY);
+            if (!saved) return;
+            try {
+                const parsed = JSON.parse(saved);
+                Object.entries(parsed).forEach(([id, layout]) => {
+                    const windowEl = document.getElementById(id);
+                    if (windowEl) {
+                        applyLayout(windowEl, layout);
+                    }
+                });
+            } catch (err) {
+                console.error('Failed to parse saved layout', err);
+            }
+        }
+
+        function saveLayoutToStorage() {
+            const layout = {};
+            document.querySelectorAll('.window').forEach(windowEl => {
+                if (!windowEl.id) return;
+                layout[windowEl.id] = getWindowLayout(windowEl);
+            });
+            localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+        }
+
+        function clearLayoutStorage() {
+            localStorage.removeItem(LAYOUT_STORAGE_KEY);
+            Object.entries(layoutDefaults).forEach(([id, layout]) => {
+                const windowEl = document.getElementById(id);
+                if (windowEl) {
+                    applyLayout(windowEl, layout);
+                }
+            });
+            recalculateItemsToShow(dockerWindow, dockerContentBody, dockerCarouselState);
+            recalculateItemsToShow(storageWindow, storageContentBody, storageCarouselState);
+            renderCarousels();
+        }
+
+        function initLayoutControls() {
+            const saveBtn = document.getElementById('save-layout-btn');
+            const clearBtn = document.getElementById('clear-layout-btn');
+
+            if (saveBtn) {
+                saveBtn.addEventListener('click', () => {
+                    saveLayoutToStorage();
+                    flashButtonState(saveBtn, '布局已保存');
+                });
+            }
+
+            if (clearBtn) {
+                clearBtn.addEventListener('click', () => {
+                    clearLayoutStorage();
+                    flashButtonState(clearBtn, '布局已清除');
+                });
+            }
+        }
+
+        function flashButtonState(button, text) {
+            if (!button) return;
+            button.dataset.tooltip = text;
+            button.classList.add('show-tooltip');
+            button.disabled = true;
+            setTimeout(() => {
+                button.classList.remove('show-tooltip');
+                delete button.dataset.tooltip;
+                button.disabled = false;
+            }, 1500);
+        }
+
+        // --- 9. 启动 (修改：重排了部分调用) ---
+        document.addEventListener('DOMContentLoaded', () => {
+            captureDefaultLayout();
+            loadLayoutFromStorage();
+            initWindowManagement();
+            initLayoutControls();
+
+            cacheElementMetrics();
+            renderCarousels();
+
+            loadSystemMetrics();
+            loadStorageData();
+            loadDockerData();
+
+            setInterval(loadSystemMetrics, 5000);
+            setInterval(loadStorageData, 10000);
+            setInterval(loadDockerData, 5000);
+        });
+
+    </script>
+
+</body>
+</html>
