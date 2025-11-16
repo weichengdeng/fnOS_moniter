@@ -54,6 +54,7 @@
             cursor: move; /* 拖拽光标 */
             user-select: none; /* 防止选中文本 */
             -webkit-user-select: none;
+            touch-action: none;
         }
         
         /* 新增：按住 Shift 键拖动标题栏时，显示调整大小的光标 */
@@ -107,6 +108,7 @@
             background: repeating-linear-gradient(135deg, #D3D3D3, #D3D3D3 4px, #F8F8F8 4px, #F8F8F8 8px);
             box-shadow: inset 2px 2px 0px #FFF;
             cursor: se-resize;
+            touch-action: none;
         }
         .window.resizing .resize-handle {
             background: repeating-linear-gradient(135deg, #B0B0B0, #B0B0B0 4px, #E0E0E0 4px, #E0E0E0 8px);
@@ -155,6 +157,7 @@
             justify-content: center;
             cursor: pointer;
             position: relative;
+            touch-action: manipulation;
         }
         .layout-btn::after {
             content: attr(data-tooltip);
@@ -179,6 +182,21 @@
         .layout-btn:active {
             transform: translate(2px, 2px);
             box-shadow: 2px 2px 0px #000;
+        }
+        @media (hover: none) and (pointer: coarse) {
+            .layout-controls {
+                opacity: 1;
+                transform: translateY(0);
+                pointer-events: auto;
+            }
+            .layout-controls-wrapper {
+                width: 80px;
+                height: auto;
+            }
+            .layout-btn {
+                width: 64px;
+                height: 64px;
+            }
         }
         .pixel-icon {
             width: 28px;
@@ -728,31 +746,24 @@
             let startTop = 0;
             let startWidth = 0;
             let startHeight = 0;
+            let currentPointerType = 'mouse';
+            let activeTouchId = null;
 
             function bindPointer(target, windowEl, type) {
                 if (!target) return;
                 target.addEventListener('mousedown', (e) => {
                     if (type === 'drag' && e.target !== target) return;
+                    if (e.button !== undefined && e.button !== 0) return;
 
-                    e.preventDefault();
-                    activeWindow = windowEl;
-                    actionType = type;
-                    const rect = activeWindow.getBoundingClientRect();
-                    const desktopRect = desktop.getBoundingClientRect();
-
-                    startX = e.clientX;
-                    startY = e.clientY;
-                    startLeft = rect.left - desktopRect.left;
-                    startTop = rect.top - desktopRect.top;
-                    startWidth = rect.width;
-                    startHeight = rect.height;
-
-                    activeWindow.classList.add(type === 'drag' ? 'dragging' : 'resizing');
-
-                    document.addEventListener('mousemove', onMove);
-                    document.addEventListener('mouseup', onMoveEnd);
-                    document.body.style.userSelect = 'none';
+                    startInteraction(e, windowEl, type, 'mouse', e);
                 });
+                target.addEventListener('touchstart', (e) => {
+                    if (type === 'drag' && e.target !== target) return;
+                    const touch = e.touches[0];
+                    if (!touch) return;
+
+                    startInteraction(touch, windowEl, type, 'touch', e);
+                }, { passive: false });
             }
 
             windows.forEach(windowEl => {
@@ -762,13 +773,42 @@
                 bindPointer(resizeHandle, windowEl, 'resize');
             });
 
-            function onMove(e) {
-                if (!activeWindow) return;
-                e.preventDefault();
+            function startInteraction(point, windowEl, type, pointerType, sourceEvent) {
+                sourceEvent.preventDefault();
+                activeWindow = windowEl;
+                actionType = type;
+                currentPointerType = pointerType;
+                activeTouchId = pointerType === 'touch' && typeof point.identifier === 'number' ? point.identifier : null;
 
+                const rect = activeWindow.getBoundingClientRect();
                 const desktopRect = desktop.getBoundingClientRect();
-                const dx = e.clientX - startX;
-                const dy = e.clientY - startY;
+
+                startX = point.clientX;
+                startY = point.clientY;
+                startLeft = rect.left - desktopRect.left;
+                startTop = rect.top - desktopRect.top;
+                startWidth = rect.width;
+                startHeight = rect.height;
+
+                activeWindow.classList.add(type === 'drag' ? 'dragging' : 'resizing');
+
+                if (pointerType === 'touch') {
+                    document.addEventListener('touchmove', onTouchMove, { passive: false });
+                    document.addEventListener('touchend', onTouchEnd);
+                    document.addEventListener('touchcancel', onTouchEnd);
+                    document.body.style.touchAction = 'none';
+                } else {
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onMoveEnd);
+                }
+
+                document.body.style.userSelect = 'none';
+            }
+
+            function handlePointerMove(clientX, clientY) {
+                const desktopRect = desktop.getBoundingClientRect();
+                const dx = clientX - startX;
+                const dy = clientY - startY;
 
                 if (actionType === 'drag') {
                     let newX = startLeft + dx;
@@ -820,7 +860,48 @@
                 }
             }
 
+            function onMove(e) {
+                if (!activeWindow) return;
+                e.preventDefault();
+
+                handlePointerMove(e.clientX, e.clientY);
+            }
+
+            function onTouchMove(e) {
+                if (!activeWindow) return;
+                const touch = getActiveTouch(e.touches);
+                if (!touch) return;
+                e.preventDefault();
+
+                handlePointerMove(touch.clientX, touch.clientY);
+            }
+
             function onMoveEnd() {
+                finalizeInteraction();
+            }
+
+            function onTouchEnd(e) {
+                const touch = getActiveTouch(e.changedTouches);
+                if (!touch) return;
+                e.preventDefault();
+
+                finalizeInteraction();
+            }
+
+            function getActiveTouch(touchList) {
+                if (!touchList || touchList.length === 0) return null;
+                if (activeTouchId === null) {
+                    return touchList[0];
+                }
+                for (let i = 0; i < touchList.length; i++) {
+                    if (touchList[i].identifier === activeTouchId) {
+                        return touchList[i];
+                    }
+                }
+                return null;
+            }
+
+            function finalizeInteraction() {
                 if (!activeWindow) return;
 
                 if (actionType === 'resize') {
@@ -832,11 +913,24 @@
                 activeWindow.classList.remove('dragging', 'resizing');
                 activeWindow = null;
                 actionType = null;
-                document.removeEventListener('mousemove', onMove);
-                document.removeEventListener('mouseup', onMoveEnd);
+
+                if (currentPointerType === 'touch') {
+                    document.removeEventListener('touchmove', onTouchMove);
+                    document.removeEventListener('touchend', onTouchEnd);
+                    document.removeEventListener('touchcancel', onTouchEnd);
+                    document.body.style.touchAction = '';
+                    activeTouchId = null;
+                } else {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onMoveEnd);
+                }
+
                 document.body.style.userSelect = '';
+                currentPointerType = 'mouse';
             }
         }
+
+
         /**
          * 辅助函数：计算高度吸附
          * @param {number} newHeight - 鼠标拖动的新高度
